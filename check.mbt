@@ -1,4 +1,10 @@
 ///|
+priv enum Change {
+  Unique(String)
+  Modify(String, Column)
+}
+
+///|
 #derive(Eq)
 priv enum FindingKind {
   Verify
@@ -15,7 +21,7 @@ priv struct Finding {
 }
 
 ///|
-fn unique_column(tokens : ArrayView[Token]) -> String? {
+fn parse_change(tokens : ArrayView[Token]) -> Change? {
   if keyword(tokens, 0, "ADD") && keyword(tokens, 1, "UNIQUE") {
     let mut i = 2
     if keyword(tokens, i, "INDEX") || keyword(tokens, i, "KEY") {
@@ -31,7 +37,13 @@ fn unique_column(tokens : ArrayView[Token]) -> String? {
       return None
     }
     guard identifier(tokens, i + 1) is Some(column) else { return None }
-    return Some(column)
+    return Some(Unique(column))
+  }
+  if keyword(tokens, 0, "MODIFY") {
+    let i = if keyword(tokens, 1, "COLUMN") { 2 } else { 1 }
+    guard identifier(tokens, i) is Some(column) else { return None }
+    guard column_definition(tokens[i + 1:]) is Some(def) else { return None }
+    return Some(Modify(column, def))
   }
   None
 }
@@ -42,28 +54,57 @@ fn quoted_identifier(name : String) -> String {
 }
 
 ///|
-fn check_unique(
-  column : String,
+fn check_change(
+  change : Change,
   table_name : String,
   table : Table,
   location : Finding,
-) -> Finding {
+) -> Finding? {
+  let column = match change {
+    Unique(column) | Modify(column, _) => column
+  }
   let field = table_name + "." + column
-  if !table.columns.contains(column.to_lower()) {
-    return { ..location, detail: "基线中缺少字段 " + field + "。", }
+  guard table.columns.get(column.to_lower()) is Some(before) else {
+    return Some({
+      ..location,
+      detail: "基线中缺少字段 " + field + "。",
+    })
   }
   let table_sql = quoted_identifier(table_name)
   let column_sql = quoted_identifier(column)
-  {
-    ..location,
-    kind: Verify,
-    detail: field +
-    " 新增唯一索引。请核对历史数据中的重复非空值。",
-    query: Some(
-      "SELECT \{column_sql}, COUNT(*) AS duplicate_count\n" +
-      "FROM \{table_sql}\nWHERE \{column_sql} IS NOT NULL\n" +
-      "GROUP BY \{column_sql}\nHAVING COUNT(*) > 1;",
-    ),
+  match change {
+    Unique(_) =>
+      Some({
+        ..location,
+        kind: Verify,
+        detail: field +
+        " 新增唯一索引。请核对历史数据中的重复非空值。",
+        query: Some(
+          "SELECT \{column_sql}, COUNT(*) AS duplicate_count\n" +
+          "FROM \{table_sql}\nWHERE \{column_sql} IS NOT NULL\n" +
+          "GROUP BY \{column_sql}\nHAVING COUNT(*) > 1;",
+        ),
+      })
+    Modify(_, after) => {
+      if before.definition != after.definition {
+        return Some({
+          ..location,
+          detail: field + " 的列定义包含空值约束以外的变化。",
+        })
+      }
+      if !before.nullable || after.nullable {
+        return None
+      }
+      Some({
+        ..location,
+        kind: Verify,
+        detail: field +
+        " 改为 NOT NULL。请核对历史数据中的空值。",
+        query: Some(
+          "SELECT COUNT(*) AS null_count\nFROM \{table_sql}\nWHERE \{column_sql} IS NULL;",
+        ),
+      })
+    }
   }
 }
 
@@ -123,7 +164,7 @@ fn collect_findings(
       if identifier(tokens, 2) is Some(name) && !symbol(tokens, 3, ".") {
         let key = name.to_lower()
         let clauses = split_items(tokens[3:])
-        if clauses.length() == 1 && unique_column(clauses[0]) is Some(column) {
+        if clauses.length() == 1 && parse_change(clauses[0]) is Some(change) {
           if unknown_change is Some((path, line)) {
             findings.push({
               ..location,
@@ -135,7 +176,9 @@ fn collect_findings(
               detail: "\{name} 已在第 \{line} 行发生前序变更，请人工复核。",
             })
           } else if tables.get(name) is Some(Some(table)) {
-            findings.push(check_unique(column, name, table, location))
+            if check_change(change, name, table, location) is Some(finding) {
+              findings.push(finding)
+            }
           } else {
             findings.push({
               ..location,

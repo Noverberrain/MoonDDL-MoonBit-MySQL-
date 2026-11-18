@@ -83,5 +83,17 @@ class MySQLIntegration(unittest.TestCase):
         mysql(read_sql("add-unique.sql"))
 
 
+    def test_nullability_query_matches_strict_mysql(self):
+        mysql("INSERT INTO orders VALUES (1, NULL, NULL), (2, 'PAY-1', NULL);")
+        self.assertEqual(mysql(query_for("require-payment.sql")), "1")
+        mysql(
+            "SET SESSION sql_mode = 'STRICT_ALL_TABLES';\n" + read_sql("require-payment.sql"),
+            expected_error=1138,
+        )
+        mysql("UPDATE orders SET payment_no = 'PAY-2' WHERE id = 1;")
+        self.assertEqual(mysql(query_for("require-payment.sql")), "0")
+        mysql("SET SESSION sql_mode = 'STRICT_ALL_TABLES';\n" + read_sql("require-payment.sql"))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

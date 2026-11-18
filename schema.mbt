@@ -1,6 +1,12 @@
 ///|
+priv struct Column {
+  nullable : Bool
+  definition : Array[String]
+}
+
+///|
 priv struct Table {
-  columns : Map[String, Unit]
+  columns : Map[String, Column]
 }
 
 ///|
@@ -69,6 +75,72 @@ fn closing_paren(tokens : ArrayView[Token], opening : Int32) -> Int32? {
 }
 
 ///|
+fn column_definition(tokens : ArrayView[Token]) -> Column? {
+  guard tokens.get(0) is Some(first) else { return None }
+  guard first.kind == Word else { return None }
+  let definition = []
+  let mut nullable = true
+  let mut seen_nullability = false
+  let mut default_null = false
+  let mut depth = 0
+  let mut i = 0
+  while i < tokens.length() {
+    let token = tokens[i]
+    if token.kind == ExecutableComment {
+      return None
+    }
+    if token.is_symbol("(") {
+      depth += 1
+    }
+    if token.is_symbol(")") {
+      depth -= 1
+    }
+    if depth == 0 {
+      if keyword(tokens, i, "NOT") && keyword(tokens, i + 1, "NULL") {
+        if seen_nullability {
+          return None
+        }
+        nullable = false
+        seen_nullability = true
+        i += 2
+        continue
+      }
+      if keyword(tokens, i, "DEFAULT") && keyword(tokens, i + 1, "NULL") {
+        if default_null {
+          return None
+        }
+        default_null = true
+        i += 2
+        continue
+      }
+      if keyword(tokens, i, "NULL") {
+        if seen_nullability {
+          return None
+        }
+        seen_nullability = true
+        i += 1
+        continue
+      }
+      if keyword(tokens, i, "PRIMARY") && keyword(tokens, i + 1, "KEY") {
+        nullable = false
+      }
+    }
+    let signature = match token.kind {
+      Word => "word " + token.text.to_upper()
+      Identifier => "identifier " + token.text
+      Quoted => "quoted " + token.text
+      _ => token.text
+    }
+    definition.push(signature)
+    i += 1
+  }
+  if default_null && !nullable {
+    return None
+  }
+  Some({ nullable, definition, })
+}
+
+///|
 fn parse_table(tokens : ArrayView[Token]) -> (String, Table?)? {
   guard keyword(tokens, 0, "CREATE") && keyword(tokens, 1, "TABLE") else {
     return None
@@ -94,9 +166,32 @@ fn parse_table(tokens : ArrayView[Token]) -> (String, Table?)? {
     }
   }
   let columns = Map([])
+  let primary = []
   for item in split_items(tokens[name_index + 2:close]) {
-    if keyword(item, 0, "CONSTRAINT") ||
-      keyword(item, 0, "PRIMARY") ||
+    let constraint = if keyword(item, 0, "CONSTRAINT") {
+      if keyword(item, 1, "PRIMARY") ||
+        keyword(item, 1, "UNIQUE") ||
+        keyword(item, 1, "FOREIGN") ||
+        keyword(item, 1, "CHECK") {
+        1
+      } else {
+        2
+      }
+    } else {
+      0
+    }
+    if keyword(item, constraint, "PRIMARY") {
+      guard keyword(item, constraint + 1, "KEY") else { return invalid }
+      let mut opening = constraint + 2
+      if keyword(item, opening, "USING") {
+        opening += 2
+      }
+      guard closing_paren(item, opening) is Some(end) else { return invalid }
+      for key in split_items(item[opening + 1:end]) {
+        guard identifier(key, 0) is Some(column) else { return invalid }
+        primary.push(column.to_lower())
+      }
+    } else if constraint > 0 ||
       keyword(item, 0, "KEY") ||
       keyword(item, 0, "INDEX") ||
       keyword(item, 0, "UNIQUE") ||
@@ -107,15 +202,17 @@ fn parse_table(tokens : ArrayView[Token]) -> (String, Table?)? {
       continue
     } else {
       guard identifier(item, 0) is Some(column) else { return invalid }
-      guard item.get(1) is Some(token) && token.kind == Word else {
-        return invalid
-      }
+      guard column_definition(item[1:]) is Some(def) else { return invalid }
       let key = column.to_lower()
       if columns.contains(key) {
         return invalid
       }
-      columns[key] = ()
+      columns[key] = def
     }
+  }
+  for key in primary {
+    guard columns.get(key) is Some(column) else { return invalid }
+    columns[key] = { ..column, nullable: false, }
   }
   if columns.is_empty() {
     return invalid

@@ -25,6 +25,38 @@ test "unique index yields a read-only query with the statement line" {
 }
 
 ///|
+test "NOT NULL detects nullable columns even in SHOW CREATE TABLE style" {
+  let report = review_migration(
+    "ALTER TABLE orders MODIFY COLUMN payment_no VARCHAR(64) NOT NULL;",
+  )
+  assert_true(report.contains("待核查 1 项，未分析 0 项"))
+  assert_true(report.contains("WHERE \u0060payment_no\u0060 IS NULL;"))
+}
+
+///|
+test "already required fields including primary-key columns need no null check" {
+  let report = review_migration("ALTER TABLE orders MODIFY id BIGINT NOT NULL;")
+  assert_true(report.contains("待核查 0 项，未分析 0 项"))
+  let explicit = review_migration(
+    "ALTER TABLE orders MODIFY id BIGINT NOT NULL;",
+    schema="CREATE TABLE orders (id BIGINT NOT NULL);",
+  )
+  assert_true(explicit.contains("待核查 0 项，未分析 0 项"))
+}
+
+///|
+test "changed type and collation are not evaluated against the old column" {
+  for
+    migration in [
+      "ALTER TABLE orders MODIFY payment_no VARCHAR(32) NOT NULL;", "ALTER TABLE orders MODIFY payment_no VARCHAR(64) COLLATE utf8mb4_bin NOT NULL;",
+    ] {
+    let report = review_migration(migration)
+    assert_true(report.contains("待核查 0 项，未分析 1 项"))
+    assert_false(report.contains("SELECT"))
+  }
+}
+
+///|
 test "quoted semicolons, comments, and nested commas are not split points" {
   let report = review_migration(
     "/* DROP COLUMN fake;\n   ALTER TABLE fake; */\nALTER TABLE orders ADD UNIQUE (code);",
