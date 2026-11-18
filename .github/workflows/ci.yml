@@ -1,0 +1,56 @@
+name: MoonDDL CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8.4
+        ports:
+          - 3306:3306
+        env:
+          MYSQL_ROOT_PASSWORD: ci-root
+          MYSQL_DATABASE: moonddl_test
+          MYSQL_USER: moonddl
+          MYSQL_PASSWORD: ci-moonddl
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 --silent"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=20
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install MoonBit
+        run: |
+          curl -fsSL https://cli.moonbitlang.com/install/unix.sh | bash
+          echo "$HOME/.moon/bin" >> "$GITHUB_PATH"
+      - name: Check and test
+        run: |
+          moon version --all
+          moon update
+          moon check --target native --deny-warn
+          moon test --target native --deny-warn
+          moon build --target native --deny-warn
+      - name: Generate review summary
+        run: |
+          moon run --target native cmd/moon-ddl -- check \
+            --schema examples/orders/schema.sql \
+            --migration examples/orders/add-unique.sql >> "$GITHUB_STEP_SUMMARY"
+      - name: Install MySQL client
+        run: |
+          if ! command -v mysql >/dev/null; then
+            sudo apt-get update
+            sudo apt-get install -y mysql-client
+          fi
+      - name: Verify generated checks against MySQL
+        env:
+          MYSQL_PWD: ci-moonddl
+        run: python3 tests/mysql_integration.py

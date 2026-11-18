@@ -1,3 +1,11 @@
+import {
+  "Noverberrain/moon-ddl" @ddl,
+  "moonbitlang/core/encoding/utf8",
+  "moonbitlang/core/env",
+  "moonbitlang/x/fs",
+  "moonbitlang/x/sys",
+}
+
 supported_targets = "native"
 
 pkgtype(kind: "executable")

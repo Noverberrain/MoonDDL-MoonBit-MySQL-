@@ -2,8 +2,12 @@
 package "Noverberrain/moon-ddl"
 
 // Values
+pub fn review(String, String, schema_path~ : String, migration_path~ : String) -> String raise ScanError
 
 // Errors
+pub(all) suberror ScanError {
+  InvalidSql(String, Int32, String)
+}
 
 // Types and methods
 

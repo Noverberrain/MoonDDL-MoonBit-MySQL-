@@ -1,0 +1,6 @@
+CREATE TABLE orders (
+  id BIGINT NOT NULL,
+  payment_no VARCHAR(64) DEFAULT NULL,
+  legacy_note VARCHAR(255) DEFAULT NULL,
+  PRIMARY KEY (id)
+) ENGINE=InnoDB;
