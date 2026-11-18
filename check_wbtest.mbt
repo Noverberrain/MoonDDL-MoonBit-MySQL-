@@ -57,6 +57,40 @@ test "changed type and collation are not evaluated against the old column" {
 }
 
 ///|
+test "drop column names the field and asks for manual review" {
+  for clause in ["DROP COLUMN `legacy_note`", "DROP legacy_note"] {
+    let report = review_migration(
+      "# old field\nALTER TABLE orders " + clause + ";",
+      schema="CREATE TABLE orders (id BIGINT, legacy_note VARCHAR(255));",
+    )
+    assert_true(report.contains("待核查 1 项，未分析 0 项"))
+    assert_true(report.contains("migration.sql:2"))
+    assert_true(report.contains("orders.legacy\\_note"))
+    assert_true(report.contains("MyBatis XML"))
+    assert_false(report.contains("SELECT"))
+  }
+}
+
+///|
+test "drop missing fields and index drops require manual analysis" {
+  for clause in ["DROP COLUMN missing", "DROP INDEX payment_no"] {
+    let report = review_migration("ALTER TABLE orders " + clause + ";")
+    assert_true(report.contains("待核查 0 项，未分析 1 项"))
+    assert_false(report.contains("将被删除"))
+  }
+}
+
+///|
+test "a dropped column cannot be checked using the old table definition" {
+  let report = review_migration(
+    "ALTER TABLE orders DROP COLUMN payment_no;\nALTER TABLE orders ADD UNIQUE (payment_no);",
+  )
+  assert_true(report.contains("待核查 1 项，未分析 1 项"))
+  assert_true(report.contains("migration.sql:2"))
+  assert_false(report.contains("SELECT"))
+}
+
+///|
 test "quoted semicolons, comments, and nested commas are not split points" {
   let report = review_migration(
     "/* DROP COLUMN fake;\n   ALTER TABLE fake; */\nALTER TABLE orders ADD UNIQUE (code);",

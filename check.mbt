@@ -2,6 +2,7 @@
 priv enum Change {
   Unique(String)
   Modify(String, Column)
+  Drop(String)
 }
 
 ///|
@@ -45,6 +46,12 @@ fn parse_change(tokens : ArrayView[Token]) -> Change? {
     guard column_definition(tokens[i + 1:]) is Some(def) else { return None }
     return Some(Modify(column, def))
   }
+  if keyword(tokens, 0, "DROP") {
+    let i = if keyword(tokens, 1, "COLUMN") { 2 } else { 1 }
+    guard tokens.length() == i + 1 else { return None }
+    guard identifier(tokens, i) is Some(column) else { return None }
+    return Some(Drop(column))
+  }
   None
 }
 
@@ -61,7 +68,7 @@ fn check_change(
   location : Finding,
 ) -> Finding? {
   let column = match change {
-    Unique(column) | Modify(column, _) => column
+    Unique(column) | Modify(column, _) | Drop(column) => column
   }
   let field = table_name + "." + column
   guard table.columns.get(column.to_lower()) is Some(before) else {
@@ -105,6 +112,13 @@ fn check_change(
         ),
       })
     }
+    Drop(_) =>
+      Some({
+        ..location,
+        kind: Verify,
+        detail: field +
+        " 将被删除。请核对 Java 实体、MyBatis XML 和其他读写方。",
+      })
   }
 }
 

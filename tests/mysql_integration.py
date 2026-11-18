@@ -95,5 +95,22 @@ class MySQLIntegration(unittest.TestCase):
         mysql("SET SESSION sql_mode = 'STRICT_ALL_TABLES';\n" + read_sql("require-payment.sql"))
 
 
+    def test_drop_column_reports_manual_review(self):
+        output = report("drop-legacy-note.sql")
+        self.assertIn("待核查 1 项，未分析 0 项", output)
+        self.assertIn("examples/orders/drop-legacy-note.sql:1", output)
+        self.assertIn("orders.legacy\\_note", output)
+        self.assertIn("MyBatis XML", output)
+        self.assertNotIn("```sql", output)
+        mysql("INSERT INTO orders VALUES (1, 'PAY-1', 'old value');")
+        mysql(read_sql("drop-legacy-note.sql"))
+        columns = mysql(
+            "SELECT COLUMN_NAME FROM information_schema.COLUMNS "
+            "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'orders' ORDER BY ORDINAL_POSITION;"
+        )
+        self.assertEqual(columns.splitlines(), ["id", "payment_no"])
+        self.assertEqual(mysql("SELECT payment_no FROM orders WHERE id = 1;"), "PAY-1")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
