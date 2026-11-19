@@ -39,6 +39,8 @@ jobs:
           moon check --target native --deny-warn
           moon test --target native --deny-warn
           moon build --target native --deny-warn
+      - name: Verify CLI exit codes
+        run: python3 tests/cli_integration.py
       - name: Generate review summary
         run: |
           moon run --target native cmd/moon-ddl -- check \

@@ -16,7 +16,13 @@ moon run --target native cmd/moon-ddl -- check --schema examples/orders/schema.s
 moon-ddl check --schema schema.sql --migration migration.sql
 ```
 
-退出码 `0` 表示生成了报告，包含待核查或未分析项时也返回 `0`。无效参数、无法读取 UTF-8 文件或无法可靠切分 SQL 时返回 `2`，错误信息写到 stderr。
+默认模式下，只要成功生成报告就返回 `0`。CI 可以添加 `--fail-on-findings`，有「待核查」或「未分析」项时返回 `1`，报告仍完整写到 stdout。报告没有这两类项时返回 `0`。两种模式下，无效参数、文件读取失败或 SQL 无法可靠切分时都返回 `2`，诊断写到 stderr。
+
+```sh
+moon-ddl check --schema schema.sql --migration migration.sql --fail-on-findings > report.md
+```
+
+门禁根据静态报告判定是否需要人工复核。出现「待核查」时，可以运行报告中的 SQL 确认历史数据。
 
 ## 支持范围
 

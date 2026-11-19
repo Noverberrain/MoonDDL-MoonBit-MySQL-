@@ -304,6 +304,13 @@ fn collect_findings(
 }
 
 ///|
+/// A review report and whether it contains items requiring human review.
+pub struct ReviewResult {
+  markdown : String
+  has_findings : Bool
+}
+
+///|
 /// Generate the Markdown review report for a baseline and an ordered migration.
 pub fn review(
   schema : String,
@@ -311,11 +318,22 @@ pub fn review(
   schema_path~ : String,
   migration_path~ : String,
 ) -> String raise ScanError {
+  review_result(schema, migration, schema_path~, migration_path~).markdown
+}
+
+///|
+/// Review SQL and expose whether the report contains a finding.
+pub fn review_result(
+  schema : String,
+  migration : String,
+  schema_path~ : String,
+  migration_path~ : String,
+) -> ReviewResult raise ScanError {
   let findings = collect_findings(
     scan(schema, schema_path),
     scan(migration, migration_path),
     schema_path,
     migration_path,
   )
-  render_report(findings)
+  { markdown: render_report(findings), has_findings: !findings.is_empty(), }
 }
