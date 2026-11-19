@@ -97,6 +97,21 @@ class MySQLIntegration(unittest.TestCase):
         self.assertEqual(mysql(query), "")
         mysql(read_sql("add-merchant-payment-unique.sql"))
 
+    def test_create_unique_index_reuses_composite_check(self):
+        mysql(
+            "INSERT INTO orders (id, merchant_id, payment_no) VALUES "
+            "(1, 10, 'PAY-1'), (2, 10, 'PAY-1'), (3, 20, 'PAY-1'), "
+            "(4, 10, NULL), (5, 10, NULL);"
+        )
+        migration = "create-unique-index.sql"
+        query = query_for(migration)
+        self.assertEqual(query, query_for("add-merchant-payment-unique.sql"))
+        self.assertEqual(mysql(query), "10\tPAY-1\t2")
+        mysql(read_sql(migration), expected_error=1062)
+        mysql("UPDATE orders SET payment_no = 'PAY-2' WHERE id = 2;")
+        self.assertEqual(mysql(query), "")
+        mysql(read_sql(migration))
+
     def test_nullability_query_matches_strict_mysql(self):
         mysql("INSERT INTO orders (id, payment_no) VALUES (1, NULL), (2, 'PAY-1');")
         self.assertEqual(mysql(query_for("require-payment.sql")), "1")

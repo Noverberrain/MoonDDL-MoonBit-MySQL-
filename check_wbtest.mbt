@@ -160,6 +160,45 @@ test "composite unique index requires every column in the baseline" {
 }
 
 ///|
+test "standalone unique indexes use the same checks as ALTER TABLE" {
+  for columns in ["payment_no", "id, `payment_no`"] {
+    let standalone = review_migration(
+      "-- header\nCREATE UNIQUE INDEX `uk_pay`\nON `orders` (" + columns + ");",
+    )
+    let alter = review_migration(
+      "-- header\nALTER TABLE orders ADD UNIQUE (" + columns + ");",
+    )
+    assert_true(standalone.contains("migration.sql:2"))
+    assert_true(standalone.contains("待核查 1 项，未分析 0 项"))
+    assert_eq(standalone, alter)
+  }
+}
+
+///|
+test "standalone index statements outside the supported grammar are reported" {
+  for
+    migration in [
+      "CREATE INDEX idx ON orders (payment_no);", "CREATE UNIQUE INDEX idx ON shop.orders (payment_no);",
+      "CREATE UNIQUE INDEX idx ON orders (payment_no(10));", "CREATE UNIQUE INDEX idx ON orders (payment_no) INVISIBLE;",
+    ] {
+    let report = review_migration(migration)
+    assert_true(report.contains("待核查 0 项，未分析 1 项"))
+    assert_false(report.contains("SELECT"))
+  }
+}
+
+///|
+test "standalone index statements share baseline and statement order checks" {
+  let report = review_migration(
+    "CREATE UNIQUE INDEX idx ON orders (missing);\nCREATE UNIQUE INDEX idx2 ON orders (payment_no);",
+  )
+  assert_true(report.contains("待核查 0 项，未分析 2 项"))
+  assert_true(report.contains("基线中缺少字段 orders.missing"))
+  assert_true(report.contains("已在第 1 行发生前序变更"))
+  assert_false(report.contains("SELECT"))
+}
+
+///|
 test "the next statement on a changed table cannot reuse the old baseline" {
   let report = review_migration(
     "ALTER TABLE orders ADD UNIQUE (id);\nALTER TABLE orders ADD UNIQUE (payment_no);\nALTER TABLE other ADD UNIQUE (ref);",

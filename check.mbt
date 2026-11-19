@@ -22,6 +22,31 @@ priv struct Finding {
 }
 
 ///|
+fn parse_index_columns(
+  tokens : ArrayView[Token],
+  opening : Int32,
+) -> Array[String]? {
+  guard closing_paren(tokens, opening) is Some(close) &&
+    close == tokens.length() - 1 else {
+    return None
+  }
+  let columns = []
+  let seen : Map[String, Unit] = Map([])
+  for part in split_items(tokens[opening + 1:close]) {
+    guard part.length() == 1 && identifier(part, 0) is Some(column) else {
+      return None
+    }
+    let key = column.to_lower()
+    if seen.contains(key) {
+      return None
+    }
+    seen[key] = ()
+    columns.push(column)
+  }
+  Some(columns)
+}
+
+///|
 fn parse_change(tokens : ArrayView[Token]) -> Change? {
   if keyword(tokens, 0, "ADD") && keyword(tokens, 1, "UNIQUE") {
     let mut i = 2
@@ -32,24 +57,7 @@ fn parse_change(tokens : ArrayView[Token]) -> Change? {
       guard identifier(tokens, i) is Some(_) else { return None }
       i += 1
     }
-    guard closing_paren(tokens, i) is Some(close) &&
-      close == tokens.length() - 1 else {
-      return None
-    }
-    let columns = []
-    let seen : Map[String, Unit] = Map([])
-    for part in split_items(tokens[i + 1:close]) {
-      guard part.length() == 1 && identifier(part, 0) is Some(column) else {
-        return None
-      }
-      let key = column.to_lower()
-      if seen.contains(key) {
-        return None
-      }
-      seen[key] = ()
-      columns.push(column)
-    }
-    return Some(Unique(columns))
+    return parse_index_columns(tokens, i).map(columns => Unique(columns))
   }
   if keyword(tokens, 0, "MODIFY") {
     let i = if keyword(tokens, 1, "COLUMN") { 2 } else { 1 }
@@ -64,6 +72,30 @@ fn parse_change(tokens : ArrayView[Token]) -> Change? {
     return Some(Drop(column))
   }
   None
+}
+
+///|
+fn parse_migration_change(tokens : ArrayView[Token]) -> (String, Change)? {
+  if keyword(tokens, 0, "ALTER") && keyword(tokens, 1, "TABLE") {
+    guard identifier(tokens, 2) is Some(table) && !symbol(tokens, 3, ".") else {
+      return None
+    }
+    let clauses = split_items(tokens[3:])
+    guard clauses.length() == 1 && parse_change(clauses[0]) is Some(change) else {
+      return None
+    }
+    return Some((table, change))
+  }
+  guard keyword(tokens, 0, "CREATE") &&
+    keyword(tokens, 1, "UNIQUE") &&
+    keyword(tokens, 2, "INDEX") &&
+    identifier(tokens, 3) is Some(_) &&
+    keyword(tokens, 4, "ON") &&
+    identifier(tokens, 5) is Some(table) &&
+    parse_index_columns(tokens, 6) is Some(columns) else {
+    return None
+  }
+  Some((table, Unique(columns)))
 }
 
 ///|
@@ -209,36 +241,37 @@ fn collect_findings(
       detail: "",
       query: None,
     }
+    if parse_migration_change(tokens) is Some((name, change)) {
+      let key = name.to_lower()
+      if unknown_change is Some((path, line)) {
+        findings.push({
+          ..location,
+          detail: "\{name} 的基线需人工复核（\{path}:\{line} 的语句影响未知）。",
+        })
+      } else if changed.get(key) is Some(line) {
+        findings.push({
+          ..location,
+          detail: "\{name} 已在第 \{line} 行发生前序变更，请人工复核。",
+        })
+      } else if tables.get(name) is Some(Some(table)) {
+        if check_change(change, name, table, location) is Some(finding) {
+          findings.push(finding)
+        }
+      } else {
+        findings.push({
+          ..location,
+          detail: "缺少 \{name} 的可靠表结构。",
+        })
+      }
+      if !changed.contains(key) {
+        changed[key] = location.line
+      }
+      continue
+    }
     if keyword(tokens, 0, "ALTER") && keyword(tokens, 1, "TABLE") {
       if identifier(tokens, 2) is Some(name) && !symbol(tokens, 3, ".") {
         let key = name.to_lower()
         let clauses = split_items(tokens[3:])
-        if clauses.length() == 1 && parse_change(clauses[0]) is Some(change) {
-          if unknown_change is Some((path, line)) {
-            findings.push({
-              ..location,
-              detail: "\{name} 的基线需人工复核（\{path}:\{line} 的语句影响未知）。",
-            })
-          } else if changed.get(key) is Some(line) {
-            findings.push({
-              ..location,
-              detail: "\{name} 已在第 \{line} 行发生前序变更，请人工复核。",
-            })
-          } else if tables.get(name) is Some(Some(table)) {
-            if check_change(change, name, table, location) is Some(finding) {
-              findings.push(finding)
-            }
-          } else {
-            findings.push({
-              ..location,
-              detail: "缺少 \{name} 的可靠表结构。",
-            })
-          }
-          if !changed.contains(key) {
-            changed[key] = location.line
-          }
-          continue
-        }
         // Ordinary ADD operations affect only the named table. Other unsupported
         // clauses may also rename a table or change the meaning of later statements.
         if clauses.length() == 1 &&
