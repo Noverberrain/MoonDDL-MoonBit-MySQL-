@@ -78,13 +78,27 @@ class MySQLIntegration(unittest.TestCase):
         mysql(read_sql("add-unique.sql"))
 
     def test_unique_allows_multiple_nulls(self):
-        mysql("INSERT INTO orders VALUES (1, NULL, NULL), (2, NULL, NULL), (3, 'PAY-1', NULL);")
+        mysql("INSERT INTO orders (id, payment_no) VALUES (1, NULL), (2, NULL), (3, 'PAY-1');")
         self.assertEqual(mysql(query_for("add-unique.sql")), "")
         mysql(read_sql("add-unique.sql"))
 
 
+    def test_composite_unique_detects_only_duplicate_nonnull_pairs(self):
+        mysql(
+            "INSERT INTO orders (id, merchant_id, payment_no) VALUES "
+            "(1, 10, 'PAY-1'), (2, 10, 'PAY-1'), (3, 20, 'PAY-1'), "
+            "(4, NULL, 'PAY-1'), (5, NULL, 'PAY-1'), "
+            "(6, 10, NULL), (7, 10, NULL), (8, NULL, NULL), (9, NULL, NULL);"
+        )
+        query = query_for("add-merchant-payment-unique.sql")
+        self.assertEqual(mysql(query), "10\tPAY-1\t2")
+        mysql(read_sql("add-merchant-payment-unique.sql"), expected_error=1062)
+        mysql("UPDATE orders SET payment_no = 'PAY-2' WHERE id = 2;")
+        self.assertEqual(mysql(query), "")
+        mysql(read_sql("add-merchant-payment-unique.sql"))
+
     def test_nullability_query_matches_strict_mysql(self):
-        mysql("INSERT INTO orders VALUES (1, NULL, NULL), (2, 'PAY-1', NULL);")
+        mysql("INSERT INTO orders (id, payment_no) VALUES (1, NULL), (2, 'PAY-1');")
         self.assertEqual(mysql(query_for("require-payment.sql")), "1")
         mysql(
             "SET SESSION sql_mode = 'STRICT_ALL_TABLES';\n" + read_sql("require-payment.sql"),
@@ -102,13 +116,13 @@ class MySQLIntegration(unittest.TestCase):
         self.assertIn("orders.legacy\\_note", output)
         self.assertIn("MyBatis XML", output)
         self.assertNotIn("```sql", output)
-        mysql("INSERT INTO orders VALUES (1, 'PAY-1', 'old value');")
+        mysql("INSERT INTO orders (id, payment_no, legacy_note) VALUES (1, 'PAY-1', 'old value');")
         mysql(read_sql("drop-legacy-note.sql"))
         columns = mysql(
             "SELECT COLUMN_NAME FROM information_schema.COLUMNS "
             "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'orders' ORDER BY ORDINAL_POSITION;"
         )
-        self.assertEqual(columns.splitlines(), ["id", "payment_no"])
+        self.assertEqual(columns.splitlines(), ["id", "merchant_id", "payment_no"])
         self.assertEqual(mysql("SELECT payment_no FROM orders WHERE id = 1;"), "PAY-1")
 
 

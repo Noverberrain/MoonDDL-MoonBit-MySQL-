@@ -113,16 +113,50 @@ test "backtick escapes round trip in generated SQL" {
 }
 
 ///|
-test "compound, expression, prefix, and multi-column index clauses are reported" {
+test "compound, expression, prefix, and repeated index columns require manual analysis" {
   for
     migration in [
-      "ALTER TABLE orders ADD UNIQUE (id, payment_no);", "ALTER TABLE orders ADD UNIQUE (payment_no(4));",
-      "ALTER TABLE orders ADD UNIQUE ((LOWER(payment_no)));", "ALTER TABLE orders ADD UNIQUE (payment_no), DROP COLUMN id;",
+      "ALTER TABLE orders ADD UNIQUE (payment_no, PAYMENT_NO);", "ALTER TABLE orders ADD UNIQUE (payment_no(4));",
+      "ALTER TABLE orders ADD UNIQUE ((LOWER(payment_no)));", "ALTER TABLE orders ADD UNIQUE (id, payment_no(4));",
+      "ALTER TABLE orders ADD UNIQUE (payment_no), DROP COLUMN id;",
     ] {
     let report = review_migration(migration)
     assert_true(report.contains("待核查 0 项，未分析 1 项"))
     assert_false(report.contains("SELECT"))
   }
+}
+
+///|
+test "composite unique index groups in index order and excludes any null key part" {
+  let report = review_migration(
+    "ALTER TABLE orders ADD UNIQUE KEY uk_merchant_payment (\u0060merchant_id\u0060, payment_no);",
+    schema="CREATE TABLE orders (payment_no VARCHAR(64), merchant_id BIGINT);",
+  )
+  assert_true(report.contains("待核查 1 项，未分析 0 项"))
+  assert_true(report.contains("新增联合唯一索引"))
+  assert_true(
+    report.contains(
+      "SELECT \u0060merchant_id\u0060, \u0060payment_no\u0060, COUNT(*)",
+    ),
+  )
+  assert_true(
+    report.contains(
+      "WHERE \u0060merchant_id\u0060 IS NOT NULL AND \u0060payment_no\u0060 IS NOT NULL",
+    ),
+  )
+  assert_true(
+    report.contains("GROUP BY \u0060merchant_id\u0060, \u0060payment_no\u0060"),
+  )
+}
+
+///|
+test "composite unique index requires every column in the baseline" {
+  let report = review_migration(
+    "ALTER TABLE orders ADD UNIQUE (payment_no, unknown);",
+  )
+  assert_true(report.contains("待核查 0 项，未分析 1 项"))
+  assert_true(report.contains("基线中缺少字段 orders.unknown"))
+  assert_false(report.contains("SELECT"))
 }
 
 ///|

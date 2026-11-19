@@ -24,11 +24,11 @@ moon-ddl check --schema schema.sql --migration migration.sql
 
 | 迁移变更 | 输出 |
 | --- | --- |
-| `ADD UNIQUE [INDEX/KEY]`，单列完整索引 | 对非空值执行分组计数的查重 SQL |
+| `ADD UNIQUE [INDEX/KEY]`，单列或多列完整索引 | 按索引列组合分组查重，排除任一索引列为 `NULL` 的记录 |
 | `MODIFY [COLUMN]`，可空列改为 `NOT NULL` | 查询该列当前的空值数量 |
 | `DROP [COLUMN]` | 列出被删字段，并提示核查 Java 实体、MyBatis XML 和其他读写方 |
 
-同时改变列类型、排序规则或其他列属性时转为人工复核。组合索引、前缀索引、表达式索引、复合变更和缺少可靠基线的表或字段均显示为「未分析」。同一张表的前序变更会使后续检查失去可靠基线。前序语句影响范围未知时，后续检查统一转为人工复核。
+同时改变列类型、排序规则或其他列属性时转为人工复核。前缀索引、表达式索引、复合变更和缺少可靠基线的表或字段均显示为「未分析」。同一张表的前序变更会使后续检查失去可靠基线。前序语句影响范围未知时，后续检查统一转为人工复核。
 
 报告基于文件内容提出核查任务。查询结果取决于执行时数据库里的数据。CI 可以把报告追加到 `$GITHUB_STEP_SUMMARY`，供审查迁移 PR 时查看。
 
@@ -37,6 +37,8 @@ moon-ddl check --schema schema.sql --migration migration.sql
 1. 执行快速开始命令，对照[预期报告](examples/orders/expected-report.md)，查看 `add-unique.sql` 第 2 行和查重 SQL。
 2. 在专用测试库执行 `schema.sql` 和 `duplicates.sql`。运行报告里的查询，结果为 `PAY-1001` 共两条。执行 `add-unique.sql` 会得到 MySQL 错误 `1062`。
 3. 把样例里第二笔订单的流水号改为 `PAY-1002`。再次执行查询应返回零行，此时重跑 `add-unique.sql` 应成功。两笔 `NULL` 订单仍保留。
+
+[联合唯一索引样例](examples/orders/add-merchant-payment-unique.sql)按商户 ID 和支付流水号查重。不同商户可以使用相同流水号。
 
 也可以把迁移参数改为 `examples/orders/require-payment.sql`。报告会生成 `WHERE payment_no IS NULL` 的计数查询。已声明 `NOT NULL` 或由主键约束为非空的列没有空值核查项。
 

@@ -1,6 +1,6 @@
 ///|
 priv enum Change {
-  Unique(String)
+  Unique(Array[String])
   Modify(String, Column)
   Drop(String)
 }
@@ -32,13 +32,24 @@ fn parse_change(tokens : ArrayView[Token]) -> Change? {
       guard identifier(tokens, i) is Some(_) else { return None }
       i += 1
     }
-    guard tokens.length() == i + 3 &&
-      symbol(tokens, i, "(") &&
-      symbol(tokens, i + 2, ")") else {
+    guard closing_paren(tokens, i) is Some(close) &&
+      close == tokens.length() - 1 else {
       return None
     }
-    guard identifier(tokens, i + 1) is Some(column) else { return None }
-    return Some(Unique(column))
+    let columns = []
+    let seen : Map[String, Unit] = Map([])
+    for part in split_items(tokens[i + 1:close]) {
+      guard part.length() == 1 && identifier(part, 0) is Some(column) else {
+        return None
+      }
+      let key = column.to_lower()
+      if seen.contains(key) {
+        return None
+      }
+      seen[key] = ()
+      columns.push(column)
+    }
+    return Some(Unique(columns))
   }
   if keyword(tokens, 0, "MODIFY") {
     let i = if keyword(tokens, 1, "COLUMN") { 2 } else { 1 }
@@ -61,6 +72,43 @@ fn quoted_identifier(name : String) -> String {
 }
 
 ///|
+fn check_unique(
+  columns : Array[String],
+  table_name : String,
+  table : Table,
+  location : Finding,
+) -> Finding {
+  for column in columns {
+    if !table.columns.contains(column.to_lower()) {
+      return {
+        ..location,
+        detail: "基线中缺少字段 " + table_name + "." + column + "。",
+      }
+    }
+  }
+  let table_sql = quoted_identifier(table_name)
+  let column_sql = columns.map(quoted_identifier)
+  let key_sql = column_sql.join(", ")
+  let non_null = column_sql.map(column => column + " IS NOT NULL").join(" AND ")
+  let detail = if columns.length() == 1 {
+    "\{table_name}.\{columns[0]} 新增唯一索引。请核对历史数据中的重复非空值。"
+  } else {
+    let key = columns.join(", ")
+    "\{table_name} (\{key}) 新增联合唯一索引。请核对各列均非空的重复组合。"
+  }
+  {
+    ..location,
+    kind: Verify,
+    detail,
+    query: Some(
+      "SELECT \{key_sql}, COUNT(*) AS duplicate_count\n" +
+      "FROM \{table_sql}\nWHERE \{non_null}\n" +
+      "GROUP BY \{key_sql}\nHAVING COUNT(*) > 1;",
+    ),
+  }
+}
+
+///|
 fn check_change(
   change : Change,
   table_name : String,
@@ -68,7 +116,9 @@ fn check_change(
   location : Finding,
 ) -> Finding? {
   let column = match change {
-    Unique(column) | Modify(column, _) | Drop(column) => column
+    Unique(columns) =>
+      return Some(check_unique(columns, table_name, table, location))
+    Modify(column, _) | Drop(column) => column
   }
   let field = table_name + "." + column
   guard table.columns.get(column.to_lower()) is Some(before) else {
@@ -77,48 +127,33 @@ fn check_change(
       detail: "基线中缺少字段 " + field + "。",
     })
   }
-  let table_sql = quoted_identifier(table_name)
-  let column_sql = quoted_identifier(column)
-  match change {
-    Unique(_) =>
-      Some({
+  if change is Modify(_, after) {
+    if before.definition != after.definition {
+      return Some({
         ..location,
-        kind: Verify,
-        detail: field +
-        " 新增唯一索引。请核对历史数据中的重复非空值。",
-        query: Some(
-          "SELECT \{column_sql}, COUNT(*) AS duplicate_count\n" +
-          "FROM \{table_sql}\nWHERE \{column_sql} IS NOT NULL\n" +
-          "GROUP BY \{column_sql}\nHAVING COUNT(*) > 1;",
-        ),
-      })
-    Modify(_, after) => {
-      if before.definition != after.definition {
-        return Some({
-          ..location,
-          detail: field + " 的列定义包含空值约束以外的变化。",
-        })
-      }
-      if !before.nullable || after.nullable {
-        return None
-      }
-      Some({
-        ..location,
-        kind: Verify,
-        detail: field +
-        " 改为 NOT NULL。请核对历史数据中的空值。",
-        query: Some(
-          "SELECT COUNT(*) AS null_count\nFROM \{table_sql}\nWHERE \{column_sql} IS NULL;",
-        ),
+        detail: field + " 的列定义包含空值约束以外的变化。",
       })
     }
-    Drop(_) =>
-      Some({
-        ..location,
-        kind: Verify,
-        detail: field +
-        " 将被删除。请核对 Java 实体、MyBatis XML 和其他读写方。",
-      })
+    if !before.nullable || after.nullable {
+      return None
+    }
+    let table_sql = quoted_identifier(table_name)
+    let column_sql = quoted_identifier(column)
+    Some({
+      ..location,
+      kind: Verify,
+      detail: field + " 改为 NOT NULL。请核对历史数据中的空值。",
+      query: Some(
+        "SELECT COUNT(*) AS null_count\nFROM \{table_sql}\nWHERE \{column_sql} IS NULL;",
+      ),
+    })
+  } else {
+    Some({
+      ..location,
+      kind: Verify,
+      detail: field +
+      " 将被删除。请核对 Java 实体、MyBatis XML 和其他读写方。",
+    })
   }
 }
 
